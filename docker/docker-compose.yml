@@ -9,7 +9,6 @@ version: "3.8"
 
 services:
   studio:
-    container_name: supabase-studio
     image: supabase/studio:20240701-05dfbec
     restart: unless-stopped
     healthcheck:
@@ -26,6 +25,7 @@ services:
     depends_on:
       analytics:
         condition: service_healthy
+        
     environment:
       STUDIO_PG_META_URL: http://meta:8080
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -46,9 +46,10 @@ services:
       NEXT_ANALYTICS_BACKEND_PROVIDER: postgres
       # Uncomment to use Big Query backend for analytics
       # NEXT_ANALYTICS_BACKEND_PROVIDER: bigquery
+    networks:
+      - dokploy-network
 
   kong:
-    container_name: supabase-kong
     image: kong:2.8.1
     restart: unless-stopped
     # https://unix.stackexchange.com/a/294837
@@ -74,9 +75,14 @@ services:
     volumes:
       # https://github.com/supabase/supabase/issues/12661
       - ./volumes/api/kong.yml:/home/kong/temp.yml:ro
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${HASH}.rule=Host(`${SUPABASE_HOST}`)"
+      - "traefik.http.services.${HASH}.loadbalancer.server.port=${SUPABASE_PORT}"
 
   auth:
-    container_name: supabase-auth
     image: supabase/gotrue:v2.151.0
     depends_on:
       db:
@@ -98,6 +104,8 @@ services:
       interval: 5s
       retries: 3
     restart: unless-stopped
+    networks:
+      - dokploy-network
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
@@ -146,10 +154,7 @@ services:
       # GOTRUE_HOOK_PASSWORD_VERIFICATION_ATTEMPT_URI="pg-functions://postgres/public/password_verification_attempt"
 
 
-
-
   rest:
-    container_name: supabase-rest
     image: postgrest/postgrest:v12.2.0
     depends_on:
       db:
@@ -167,10 +172,11 @@ services:
       PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
       PGRST_APP_SETTINGS_JWT_EXP: ${JWT_EXPIRY}
     command: "postgrest"
+    networks:
+      - dokploy-network
 
   realtime:
     # This container name looks inconsistent but is correct because realtime constructs tenant id by parsing the subdomain
-    container_name: realtime-dev.supabase-realtime
     image: supabase/realtime:v2.29.15
     depends_on:
       db:
@@ -211,10 +217,11 @@ services:
       RLIMIT_NOFILE: "10000"
       APP_NAME: realtime
       SEED_SELF_HOST: true
+    networks:
+      - dokploy-network
 
   # To use S3 backed storage: docker compose -f docker-compose.yml -f docker-compose.s3.yml up
   storage:
-    container_name: supabase-storage
     image: supabase/storage-api:v1.0.6
     depends_on:
       db:
@@ -255,9 +262,10 @@ services:
       IMGPROXY_URL: http://imgproxy:5001
     volumes:
       - ./volumes/storage:/var/lib/storage:z
+    networks:
+      - dokploy-network
 
   imgproxy:
-    container_name: supabase-imgproxy
     image: darthsim/imgproxy:v3.8.0
     healthcheck:
       test: [ "CMD", "imgproxy", "health" ]
@@ -271,9 +279,10 @@ services:
       IMGPROXY_ENABLE_WEBP_DETECTION: ${IMGPROXY_ENABLE_WEBP_DETECTION}
     volumes:
       - ./volumes/storage:/var/lib/storage:z
+    networks:
+      - dokploy-network
 
   meta:
-    container_name: supabase-meta
     image: supabase/postgres-meta:v0.83.2
     depends_on:
       db:
@@ -289,9 +298,10 @@ services:
       PG_META_DB_NAME: ${POSTGRES_DB}
       PG_META_DB_USER: supabase_admin
       PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - dokploy-network
 
   functions:
-    container_name: supabase-edge-functions
     image: supabase/edge-runtime:v1.55.0
     restart: unless-stopped
     depends_on:
@@ -311,9 +321,11 @@ services:
       - start
       - --main-service
       - /home/deno/functions/main
+    networks:
+      - dokploy-network
 
+  
   analytics:
-    container_name: supabase-analytics
     image: supabase/logflare:1.4.0
     healthcheck:
       test: [ "CMD", "curl", "http://localhost:4000/health" ]
@@ -353,10 +365,11 @@ services:
       # GOOGLE_PROJECT_NUMBER: ${GOOGLE_PROJECT_NUMBER}
     ports:
       - 4000:4000
+    networks:
+      - dokploy-network
 
   # Comment out everything below this point if you are using an external Postgres database
   db:
-    container_name: supabase-db
     image: supabase/postgres:15.1.1.61
     healthcheck:
       test: pg_isready -U postgres -h localhost
@@ -400,14 +413,14 @@ services:
       - ./volumes/db/logs.sql:/docker-entrypoint-initdb.d/migrations/99-logs.sql:Z
       # Use named volume to persist pgsodium decryption key between restarts
       - db-config:/etc/postgresql-custom
+    networks:
+      - dokploy-network
 
   vector:
-    container_name: supabase-vector
     image: timberio/vector:0.28.1-alpine
     healthcheck:
       test:
         [
-
           "CMD",
           "wget",
           "--no-verbose",
@@ -419,11 +432,17 @@ services:
       interval: 5s
       retries: 3
     volumes:
-      - ./volumes/logs/vector.yml:/etc/vector/vector.yml:ro
+      - ./volumes/logs/vector.yml:/etc/vector/vector.yml
       - ${DOCKER_SOCKET_LOCATION}:/var/run/docker.sock:ro
     environment:
       LOGFLARE_API_KEY: ${LOGFLARE_API_KEY}
     command: [ "--config", "etc/vector/vector.yml" ]
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true
 
 volumes:
   db-config:
